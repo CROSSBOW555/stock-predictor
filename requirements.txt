@@ -1,0 +1,8 @@
+Flask
+Flask-Cors
+gunicorn
+yfinance
+pandas
+pandas-ta
+xgboost
+scikit-learn
