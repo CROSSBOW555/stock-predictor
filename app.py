@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import yfinance as yf
 import pandas as pd
@@ -6,13 +6,17 @@ import pandas_ta as ta
 import xgboost as xgb
 from sklearn.metrics import accuracy_score
 import warnings
+import io
+import base64
+import matplotlib.pyplot as plt
+import seaborn as sns
+import matplotlib
+matplotlib.use('Agg') # Use a non-interactive backend for Matplotlib
 
-# Suppress warnings for a cleaner output
-warnings.filterwarnings("ignore", category=UserWarning)
-
-# Initialize the Flask application
-app = Flask(__name__)
-# Enable CORS to allow cross-origin requests
+# --- Flask App Initialization ---
+# The key change is here: template_folder='.' tells Flask to look for index.html
+# in the same directory as this app.py file.
+app = Flask(__name__, template_folder='.')
 CORS(app)
 
 # --- Data Processing and Model Logic ---
@@ -29,60 +33,65 @@ def get_prediction_data(ticker):
     data.ta.ema(length=20, append=True)
     data.ta.rsi(length=14, append=True)
     data.ta.macd(fast=12, slow=26, signal=9, append=True)
+    
+    # Create the target variable before dropping NaN values
+    data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
     data.dropna(inplace=True)
     
-    # 3. Target Variable
-    data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
-    
-    # Isolate data for training and the last day for prediction
-    df_train = data.iloc[:-1]
-    last_day_features = data.iloc[-1:]
+    # Ensure there's enough data after processing
+    if len(data) < 252:
+        return {"error": f"Not enough historical data for '{ticker}' to make a reliable prediction."}
 
-    features = [col for col in df_train.columns if col not in ['Target', 'Open', 'High', 'Low', 'Close', 'Volume', 'Dividends', 'Stock Splits']]
-    X = df_train[features]
-    y = df_train['Target']
+    features = [col for col in data.columns if col not in ['Target', 'Open', 'High', 'Low', 'Close', 'Volume', 'Dividends', 'Stock Splits']]
+    X = data[features]
+    y = data['Target']
     
-    # 4. Train the Model (on all available data for best prediction)
+    # Split into a training set and a test set (last year)
+    train_size = len(data) - 252
+    X_train, X_test = X.iloc[:train_size], X.iloc[train_size:]
+    y_train, y_test = y.iloc[:train_size], y.iloc[train_size:]
+
+    # 3. Train the Model
     model = xgb.XGBClassifier(
         objective='binary:logistic', n_estimators=100, learning_rate=0.1,
         use_label_encoder=False, eval_metric='logloss'
     )
-    model.fit(X, y)
+    model.fit(X_train, y_train)
     
-    # Evaluate on the full dataset to give a general idea of performance
-    y_pred_all = model.predict(X)
-    accuracy = accuracy_score(y, y_pred_all)
-
-    # 5. Predict for the next day
-    prediction_features = last_day_features[features]
-    next_day_prediction = model.predict(prediction_features)[0]
+    # 4. Evaluate the Model on the test set
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    # 5. Predict for the next day using the very last row of data
+    last_day_features = data.iloc[-1:][features]
+    next_day_prediction = model.predict(last_day_features)[0]
     prediction_text = "UP" if next_day_prediction == 1 else "DOWN"
-
+    
     return {
         "prediction_text": prediction_text,
         "accuracy": f"{accuracy:.2%}",
-        "ticker": ticker
+        "ticker": ticker.upper()
     }
 
-# --- Flask Routes ---
-
+# --- API Endpoints ---
 @app.route('/')
-def index():
+def home():
     """Serves the main HTML page."""
     return render_template('index.html')
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    """API endpoint to handle prediction requests."""
+    """Handles the prediction request from the frontend."""
     req_data = request.get_json()
     ticker = req_data.get('ticker')
+    
     if not ticker:
         return jsonify({"error": "Ticker symbol is required."}), 400
     
-    results = get_prediction_data(ticker.upper())
+    results = get_prediction_data(ticker)
     return jsonify(results)
 
-# This block is for local testing (optional)
-if __name__ == '__main__':
+# This part is for local testing and not used by Gunicorn on Render
+if __name__ == "__main__":
     app.run(debug=True)
 
