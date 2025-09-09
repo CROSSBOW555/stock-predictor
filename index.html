@@ -17,49 +17,64 @@
         .info-box { background-color: #ddf4ff; border: 1px solid #a2d9ff; }
         .error-box { background-color: #ffebe9; border: 1px solid #ffafa3; color: #d82700; font-weight: bold; }
         .results-box { text-align: center; }
-        .results-box h3 { margin-top: 0; font-size: 2rem; }
-        .up { color: #2da44e; } .down { color: #d82700; }
+        .prediction-summary { font-size: 1.25rem; line-height: 1.6; color: #333; margin: 1rem 0; }
+        .up { color: #2da44e; font-weight: bold; } 
+        .down { color: #d82700; font-weight: bold; }
         .caution-box { background-color: #fff8c5; border: 1px solid #f2c900; }
         .loader { margin: 2rem auto; border: 5px solid #f3f3f3; border-radius: 50%; border-top: 5px solid #3498db; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        .matrix-container { margin-top: 2rem; }
+        .matrix-container img { max-width: 100%; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Stock Trend Predictor 📈</h1>
+
         <form id="prediction-form">
             <input type="text" id="ticker-input" name="ticker" placeholder="Enter Stock Ticker (e.g., AAPL)" required>
             <button type="submit" id="submit-button">Analyze</button>
         </form>
+        
         <div class="info-box">
             <p><strong>Examples:</strong> AAPL (Apple), GOOGL (Google), MSFT (Microsoft), TSLA (Tesla)</p>
             <p>Find more symbols on <a href="https://finance.yahoo.com/" target="_blank">Yahoo Finance</a>.</p>
         </div>
+
+        <!-- This div will hold errors, the loader, and results -->
         <div id="response-area"></div>
+
     </div>
+
     <script>
         const form = document.getElementById('prediction-form');
         const tickerInput = document.getElementById('ticker-input');
         const responseArea = document.getElementById('response-area');
         const submitButton = document.getElementById('submit-button');
+
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             const ticker = tickerInput.value;
+
             responseArea.innerHTML = `<div class="loader"></div>`;
             submitButton.disabled = true;
             submitButton.innerText = "Analyzing...";
+
             try {
                 const response = await fetch('/predict', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ ticker: ticker })
                 });
+
                 const data = await response.json();
+                
                 if (data.error) {
                     displayError(data.error);
                 } else {
                     displayResults(data);
                 }
+
             } catch (error) {
                 displayError('An unexpected error occurred. Please try again.');
                 console.error('Fetch Error:', error);
@@ -68,16 +83,28 @@
                 submitButton.innerText = "Analyze";
             }
         });
+
         function displayError(message) {
             responseArea.innerHTML = `<div class="error-box">${message}</div>`;
         }
+
         function displayResults(data) {
             const resultClass = data.prediction_text === 'UP' ? 'up' : 'down';
+            
+            // This is the new HTML structure which includes the confusion matrix image
             responseArea.innerHTML = `
                 <div class="results-box">
                     <h2>Analysis for ${data.ticker}</h2>
-                    <h3>Prediction: <span class="${resultClass}">${data.prediction_text}</span></h3>
-                    <p><em>(Overall Model Accuracy on Historical Data: ${data.accuracy})</em></p>
+                    <p class="prediction-summary">
+                        ${data.prediction_summary.replace(data.prediction_text, `<span class="${resultClass}">${data.prediction_text}</span>`)}
+                    </p>
+                    <p><em>(Model Accuracy on Recent Historical Data: ${data.accuracy})</em></p>
+                    
+                    <!-- NEW: This container will hold the confusion matrix image -->
+                    <div class="matrix-container">
+                        <img src="${data.confusion_matrix_img}" alt="Confusion Matrix">
+                    </div>
+
                     <div class="caution-box">
                         <p><strong>⚠️ Disclaimer:</strong> This is an AI-generated prediction based on historical patterns and is not financial advice. Past performance is not indicative of future results.</p>
                     </div>
