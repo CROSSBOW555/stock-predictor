@@ -6,3 +6,5 @@ pandas
 pandas-ta
 xgboost
 scikit-learn
+matplotlib
+seaborn
