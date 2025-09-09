@@ -4,18 +4,19 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import xgboost as xgb
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, confusion_matrix
 import warnings
 import io
 import base64
+
+# Use a non-interactive backend for Matplotlib, required for server environments
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
-import matplotlib
-matplotlib.use('Agg') # Use a non-interactive backend for Matplotlib
+
 
 # --- Flask App Initialization ---
-# The key change is here: template_folder='.' tells Flask to look for index.html
-# in the same directory as this app.py file.
 app = Flask(__name__, template_folder='.')
 CORS(app)
 
@@ -34,11 +35,9 @@ def get_prediction_data(ticker):
     data.ta.rsi(length=14, append=True)
     data.ta.macd(fast=12, slow=26, signal=9, append=True)
     
-    # Create the target variable before dropping NaN values
     data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
     data.dropna(inplace=True)
     
-    # Ensure there's enough data after processing
     if len(data) < 252:
         return {"error": f"Not enough historical data for '{ticker}' to make a reliable prediction."}
 
@@ -46,7 +45,6 @@ def get_prediction_data(ticker):
     X = data[features]
     y = data['Target']
     
-    # Split into a training set and a test set (last year)
     train_size = len(data) - 252
     X_train, X_test = X.iloc[:train_size], X.iloc[train_size:]
     y_train, y_test = y.iloc[:train_size], y.iloc[train_size:]
@@ -58,40 +56,59 @@ def get_prediction_data(ticker):
     )
     model.fit(X_train, y_train)
     
-    # 4. Evaluate the Model on the test set
+    # 4. Evaluate and Create Confusion Matrix
     y_pred = model.predict(X_test)
     accuracy = accuracy_score(y_test, y_pred)
+    cm = confusion_matrix(y_test, y_pred)
+
+    # --- NEW: Generate Confusion Matrix Plot ---
+    fig, ax = plt.subplots(figsize=(6, 4))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
+                xticklabels=['Predicted Down', 'Predicted Up'],
+                yticklabels=['Actual Down', 'Actual Up'])
+    ax.set_xlabel('Predicted Label')
+    ax.set_ylabel('True Label')
+    ax.set_title('Model Performance (Confusion Matrix)')
     
-    # 5. Predict for the next day using the very last row of data
+    # Save plot to a memory buffer
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight')
+    plt.close(fig) # Close the figure to free up memory
+    buf.seek(0)
+    
+    # Encode the image to Base64 to send it over the web
+    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+    confusion_matrix_url = f"data:image/png;base64,{img_base64}"
+    # --- END OF NEW PLOT CODE ---
+
+    # 5. Predict for the next day
     last_day_features = data.iloc[-1:][features]
     next_day_prediction = model.predict(last_day_features)[0]
-    prediction_text = "UP" if next_day_prediction == 1 else "DOWN"
-    
+    prediction_direction = "UP" if next_day_prediction == 1 else "DOWN"
+    prediction_summary = f"Based on the analysis of historical data, the model predicts that the stock for {ticker.upper()} will go {prediction_direction} on the next trading day."
+
     return {
-        "prediction_text": prediction_text,
+        "prediction_text": prediction_direction,
+        "prediction_summary": prediction_summary,
         "accuracy": f"{accuracy:.2%}",
-        "ticker": ticker.upper()
+        "ticker": ticker.upper(),
+        "confusion_matrix_img": confusion_matrix_url # Add the image data to the response
     }
 
 # --- API Endpoints ---
 @app.route('/')
 def home():
-    """Serves the main HTML page."""
     return render_template('index.html')
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    """Handles the prediction request from the frontend."""
     req_data = request.get_json()
     ticker = req_data.get('ticker')
-    
     if not ticker:
         return jsonify({"error": "Ticker symbol is required."}), 400
-    
     results = get_prediction_data(ticker)
     return jsonify(results)
 
-# This part is for local testing and not used by Gunicorn on Render
 if __name__ == "__main__":
     app.run(debug=True)
 
